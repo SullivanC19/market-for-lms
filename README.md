@@ -17,5 +17,11 @@ python run_wildbench_tinker.py \
 
 To run evals
 ```
-
+python run_wildbench_eval.py \
+  --outputs-dir results/passk10 \
+  --eval-results-dir eval_results/passk10 \
+  --wildbench-dir external/WildBench \
+  --generators-file tinker_generators.json \
+  --judge-model gpt-5.4-nano \
+  --overwrite
 ```

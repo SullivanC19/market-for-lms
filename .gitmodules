@@ -1,0 +1,3 @@
+[submodule "external/WildBench"]
+	path = external/WildBench
+	url = https://github.com/allenai/WildBench.git

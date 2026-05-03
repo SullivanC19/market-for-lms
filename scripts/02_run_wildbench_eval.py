@@ -4,13 +4,13 @@ Create WildBench judge batch files for generated local-result JSONs.
 
 Expected generated-output layout:
 
-  results/passk10/<generator>/rep_00.json
-  results/passk10/<generator>/rep_01.json
+  results/responses/passk10/<generator>/rep_00.json
+  results/responses/passk10/<generator>/rep_01.json
   ...
 
 For each rep_XX.json, this runs WildBench's src/eval.py in score mode and writes:
 
-  eval_results/passk10/score.v2/eval=<judge>/<generator>/rep_XX.batch-submit.jsonl
+  results/evals/passk10/score.v2/eval=<judge>/<generator>/rep_XX.batch-submit.jsonl
 
 By default, this only prepares OpenAI Batch input files. Pass --submit to call
 WildBench's src/openai_batch_eval/submit_batch.py on each generated file.
@@ -25,21 +25,16 @@ import sys
 from pathlib import Path
 from typing import Iterable
 
+_scripts_dir = Path(__file__).resolve().parent
+if str(_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_scripts_dir))
 
-DEFAULT_GENERATORS = [
-    "tinker__llama_3_2_1b",
-    "tinker__qwen3_4b_instruct_2507",
-    "tinker__qwen3_30b_a3b_instruct_2507",
-    "tinker__gpt_oss_20b",
-    "tinker__nemotron_3_nano_30b_a3b_bf16",
-    "tinker__llama_3_1_8b_instruct",
-    "tinker__qwen3_8b",
-]
+import constants
 
 
 def load_generators_from_registry(path: Path, keep_defaults_only: bool) -> list[str]:
     if keep_defaults_only:
-        return DEFAULT_GENERATORS
+        return list(constants.DEFAULT_GENERATORS)
 
     payload = json.loads(path.read_text())
     generators = [g["generator"] for g in payload.get("generators", [])]
@@ -107,10 +102,10 @@ def build_submit_cmd(*, python_exe: str, wildbench_dir: Path, batch_file: Path) 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--outputs-dir", default="results/passk10")
-    parser.add_argument("--eval-results-dir", default="eval_results/passk10")
-    parser.add_argument("--wildbench-dir", default=".", help="Path to cloned WildBench repo root")
-    parser.add_argument("--generators-file", default="tinker_generators.json")
+    parser.add_argument("--responses-dir", default=constants.DEFAULT_RESPONSES_DIR)
+    parser.add_argument("--evals-dir", default=constants.DEFAULT_EVALS_DIR)
+    parser.add_argument("--wildbench-dir", default=constants.DEFAULT_WILDBENCH_REPO_DIR, help="Path to cloned WildBench repo root")
+    parser.add_argument("--generators-file", default=constants.DEFAULT_GENERATORS_REGISTRY)
     parser.add_argument(
         "--generators",
         nargs="*",
@@ -122,8 +117,8 @@ def main() -> None:
         action="store_true",
         help="Use every generator in --generators-file instead of the top-7 defaults.",
     )
-    parser.add_argument("--judge-model", default="gpt-5.4-nano")
-    parser.add_argument("--eval-template", default="evaluation/eval_template.score.v2.md")
+    parser.add_argument("--judge-model", default=constants.DEFAULT_JUDGE_MODEL)
+    parser.add_argument("--eval-template", default=constants.DEFAULT_EVAL_TEMPLATE_RELATIVE)
     parser.add_argument("--python", default=sys.executable)
     parser.add_argument(
         "--max-words-to-eval",
@@ -136,8 +131,8 @@ def main() -> None:
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
-    outputs_dir = Path(args.outputs_dir)
-    eval_results_dir = Path(args.eval_results_dir)
+    responses_dir = Path(args.responses_dir)
+    evals_dir = Path(args.evals_dir)
     wildbench_dir = Path(args.wildbench_dir)
     generators_file = Path(args.generators_file)
     eval_template = Path(args.eval_template)
@@ -154,15 +149,15 @@ def main() -> None:
 
     jobs: list[tuple[str, Path, Path]] = []
     for generator in generators:
-        rep_files = existing_rep_files(outputs_dir, generator)
+        rep_files = existing_rep_files(responses_dir, generator)
         if not rep_files:
-            print(f"Skipping {generator}: no rep_*.json files under {outputs_dir / generator}")
+            print(f"Skipping {generator}: no rep_*.json files under {responses_dir / generator}")
             continue
 
         for rep_file in rep_files:
             rep_name = rep_file.stem  # rep_00
             out_file = (
-                eval_results_dir
+                evals_dir
                 / "score.v2"
                 / f"eval={args.judge_model}"
                 / generator

@@ -5,8 +5,8 @@
 # num_samples=<repetitions>, then writes one WildBench-compatible file per
 # repetition:
 #
-#   <out-dir>/<generator>/rep_00.json
-#   <out-dir>/<generator>/rep_01.json
+#   <responses-dir>/<generator>/rep_00.json
+#   <responses-dir>/<generator>/rep_01.json
 #   ...
 #
 # Each rep file is compatible with WildBench src/eval.py:
@@ -18,20 +18,23 @@ import argparse
 import asyncio
 import json
 import os
+import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+_scripts_dir = Path(__file__).resolve().parent
+if str(_scripts_dir) not in sys.path:
+    sys.path.insert(0, str(_scripts_dir))
+
+import constants
 import tinker
 from datasets import load_dataset
 from tinker import types
 from tinker_cookbook.model_info import get_recommended_renderer_name
 from tinker_cookbook.renderers import get_renderer
 from tqdm import tqdm
-
-
-DEFAULT_GENERATORS_FILE = "tinker_generators.json"
 
 
 def utc_now_iso() -> str:
@@ -342,12 +345,12 @@ def build_output_row(
 
 def load_existing_outputs(
     *,
-    out_dir: Path,
+    responses_dir: Path,
     repetitions: int,
     resolved_limit: int,
     overwrite: bool,
 ) -> tuple[list[list[dict[str, Any]]], int]:
-    paths = [out_dir / f"rep_{rep:02d}.json" for rep in range(repetitions)]
+    paths = [responses_dir / f"rep_{rep:02d}.json" for rep in range(repetitions)]
 
     if overwrite:
         for path in paths:
@@ -377,7 +380,7 @@ async def generate(
     generator: str,
     base_model: str,
     pricing_usd_per_mtok: dict[str, float],
-    out_dir: Path,
+    responses_dir: Path,
     repetitions: int,
     requested_limit: int | None,
     resolved_limit: int,
@@ -389,10 +392,10 @@ async def generate(
     overwrite: bool,
     verbose: bool,
 ) -> None:
-    out_dir.mkdir(parents=True, exist_ok=True)
-    rep_paths = [out_dir / f"rep_{rep:02d}.json" for rep in range(repetitions)]
+    responses_dir.mkdir(parents=True, exist_ok=True)
+    rep_paths = [responses_dir / f"rep_{rep:02d}.json" for rep in range(repetitions)]
     rows_by_rep, start_index = load_existing_outputs(
-        out_dir=out_dir,
+        responses_dir=responses_dir,
         repetitions=repetitions,
         resolved_limit=resolved_limit,
         overwrite=overwrite,
@@ -406,9 +409,9 @@ async def generate(
         "generator": generator,
         "base_model": base_model,
         "recommended_renderer": renderer_name,
-        "dataset": "allenai/WildBench",
-        "dataset_config": "v2",
-        "dataset_split": "test",
+        "dataset": constants.WILDBENCH_HF_DATASET,
+        "dataset_config": constants.WILDBENCH_HF_CONFIG,
+        "dataset_split": constants.WILDBENCH_HF_SPLIT,
         "dataset_size": len(bench),
         "requested_limit": requested_limit,
         "resolved_limit": resolved_limit,
@@ -477,7 +480,7 @@ async def generate(
                 atomic_write_json(path, rows_by_rep[rep])
 
     total_errors = sum(1 for rows in rows_by_rep for row in rows if row.get("error"))
-    print(f"Wrote {repetitions} repetition files under {out_dir}")
+    print(f"Wrote {repetitions} repetition files under {responses_dir}")
     print(f"Rows per repetition: {len(rows_by_rep[0]) if rows_by_rep else 0}")
     print(f"Errored rows across all reps: {total_errors}")
 
@@ -485,15 +488,15 @@ async def generate(
 async def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--generator", required=True)
-    parser.add_argument("--generators-file", default=DEFAULT_GENERATORS_FILE)
-    parser.add_argument("--out-dir", required=True)
-    parser.add_argument("--repetitions", type=int, default=10)
+    parser.add_argument("--generators-file", default=constants.DEFAULT_GENERATORS_REGISTRY)
+    parser.add_argument("--responses-dir", required=True)
+    parser.add_argument("--repetitions", type=int, default=constants.DEFAULT_REPETITIONS)
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--temperature", type=float, default=1.0)
-    parser.add_argument("--max-tokens", type=int, default=4096)
-    parser.add_argument("--concurrency", type=int, default=4)
-    parser.add_argument("--retries", type=int, default=2)
-    parser.add_argument("--request-timeout-s", type=float, default=300.0)
+    parser.add_argument("--temperature", type=float, default=constants.DEFAULT_TEMPERATURE)
+    parser.add_argument("--max-tokens", type=int, default=constants.DEFAULT_MAX_TOKENS)
+    parser.add_argument("--concurrency", type=int, default=constants.DEFAULT_CONCURRENCY)
+    parser.add_argument("--retries", type=int, default=constants.DEFAULT_RETRIES_GENERATE)
+    parser.add_argument("--request-timeout-s", type=float, default=constants.DEFAULT_REQUEST_TIMEOUT_S)
     parser.add_argument("--verbose", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -513,19 +516,24 @@ async def main() -> None:
     renderer_name = get_recommended_renderer_name(base_model)
     renderer = get_renderer(renderer_name, tokenizer)
 
-    bench = load_dataset("allenai/WildBench", "v2", split="test", token=os.environ.get("HF_TOKEN"))
+    bench = load_dataset(
+        constants.WILDBENCH_HF_DATASET,
+        constants.WILDBENCH_HF_CONFIG,
+        split=constants.WILDBENCH_HF_SPLIT,
+        token=os.environ.get("HF_TOKEN"),
+    )
     resolved_limit = len(bench) if args.limit is None else min(args.limit, len(bench))
 
-    out_dir = Path(args.out_dir) / args.generator
+    responses_dir = Path(args.responses_dir) / args.generator
     manifest = {
         "script": Path(__file__).name,
         "created_at": utc_now_iso(),
         "generator": args.generator,
         "base_model": base_model,
         "recommended_renderer": renderer_name,
-        "dataset": "allenai/WildBench",
-        "dataset_config": "v2",
-        "dataset_split": "test",
+        "dataset": constants.WILDBENCH_HF_DATASET,
+        "dataset_config": constants.WILDBENCH_HF_CONFIG,
+        "dataset_split": constants.WILDBENCH_HF_SPLIT,
         "dataset_size": len(bench),
         "requested_limit": args.limit,
         "resolved_limit": resolved_limit,
@@ -539,9 +547,9 @@ async def main() -> None:
         "request_timeout_s": args.request_timeout_s,
         "uses_num_samples_for_repetitions": True,
         "num_samples_per_request": args.repetitions,
-        "output_files": [str(out_dir / f"rep_{rep:02d}.json") for rep in range(args.repetitions)],
+        "output_files": [str(responses_dir / f"rep_{rep:02d}.json") for rep in range(args.repetitions)],
     }
-    atomic_write_json(out_dir / "manifest.json", manifest)
+    atomic_write_json(responses_dir / "manifest.json", manifest)
 
     await generate(
         bench=bench,
@@ -551,7 +559,7 @@ async def main() -> None:
         generator=args.generator,
         base_model=base_model,
         pricing_usd_per_mtok=pricing_usd_per_mtok,
-        out_dir=out_dir,
+        responses_dir=responses_dir,
         repetitions=args.repetitions,
         requested_limit=args.limit,
         resolved_limit=resolved_limit,
